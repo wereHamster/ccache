@@ -95,6 +95,24 @@ This will work as long as /usr/local/bin comes before the path to gcc
 Note! Do not use a hard link, use a symbolic link. A hardlink will
 cause "interesting" problems.
 
+manpagesection(EXTRA OPTIONS)
+
+When run as a compiler front end ccache usually just takes the same
+command line options as the compiler you are using. The only exception
+to this is the option '--ccache-skip'. That option can be used to tell
+ccache that the next option is definately not a input filename, and
+should be passed along to the compiler as-is. 
+
+The reason this can be important is that ccache does need to parse the
+command line and determine what is an input filename and what is a
+compiler option, as it needs the input filename to determine the name
+of the resulting object file (among other things). The heuristic
+ccache uses in this parse is that any string on the command line that
+exists as a file is treated as an input file name (usually a C
+file). By using --ccache-skip you can force an option to not be
+treated as an input file name and instead be passed along to the
+compiler as a command line option.
+
 manpagesection(ENVIRONMENT VARIABLES)
 
 ccache used a number of environment variables to control operation. In
@@ -120,6 +138,10 @@ dit(bf(CCACHE_CC)) You can optionally set CCACHE_CC to force the name
 of the compiler to use. If you don't do this then ccache works it out
 from the command line.
 
+dit(bf(CCACHE_PREFIX)) This option adds a prefix to the command line
+that ccache runs when invoking the compiler. Also see the section
+below on using ccache with distcc.
+
 dit(bf(CCACHE_DISABLE)) If you set the environment variable
 CCACHE_DISABLE then ccache will just call the real compiler,
 bypassing the cache completely.
@@ -141,12 +163,11 @@ dit(bf(CCACHE_NLEVELS)) The environment variable CCACHE_NLEVELS allows
 you to choose the number of levels of hash in the cache directory. The
 default is 2. The minimum is 1 and the maximum is 8. 
 
-dit(bf(CCACHE_NOLINK)) If you set the environment variable
-CCACHE_NOLINK then ccache will not use hard links from the cache
-directory when creating the compiler output and will do a file copy
-instead. The main reason for setting this option is to avoid the
-update of the modification time on object files that are the result of
-the same compilation in a different directory.
+dit(bf(CCACHE_HARDLINK)) If you set the environment variable
+CCACHE_HARDLINK then ccache will attempt to use hard links from the
+cache directory when creating the compiler output rather than using a
+file copy. Using hard links is faster, but can confuse programs like
+'make' that rely on modification times.
 
 dit(bf(CCACHE_RECACHE)) This forces ccache to not use any cached
 results, even if it finds them. New results are still cached, but
@@ -186,9 +207,10 @@ enddit()
 
 manpagesection(CACHE SIZE MANAGEMENT)
 
-By default ccache has no limit on the cache size. You can set a limit
-using the "ccache -M" and "ccache -F" options, which set the size and
-number of files limits.
+By default ccache has a one gigabyte limit on the cache size and no
+maximum number of files. You can set a different limit using the
+"ccache -M" and "ccache -F" options, which set the size and number of
+files limits.
 
 When these limits are reached ccache will reduce the cache to 20%
 below the numbers you specified in order to avoid doing the cache
@@ -217,6 +239,18 @@ compiler output that you would get without the cache. If you ever
 discover a case where ccache changes the output of your compiler then
 please let me know.
 
+manpagesection(USING CCACHE WITH DISTCC)
+
+distcc is a very useful program for distributing compilation across a
+range of compiler servers. It is often useful to combine distcc with
+ccache, so that compiles that are done are sped up by distcc, but that
+ccache avoids the compile completely where possible.
+
+To use distcc with ccache I recommend using the CCACHE_PREFIX
+option. You just need to set the environment variable CCACHE_PREFIX to
+'distcc' and ccache will prefix the command line used with the
+compiler with the command 'distcc'. 
+
 manpagesection(SHARING A CACHE)
 
 A group of developers can increase the cache hit rate by sharing a
@@ -230,7 +264,6 @@ following conditions need to be met:
 
 itemize(
   it() Use the same bf(CCACHE_DIR) environment variable setting
-  it() Set the bf(CCACHE_NOLINK) environment variable
   it() Make sure that all users have write permission in the entire
   cache directory (and that you trust all users of the shared cache). 
   it() Tell your users to set a umask that allows group writes

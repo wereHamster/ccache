@@ -83,6 +83,8 @@ static struct {
 */
 static void failed(void)
 {
+	char *e;
+
 	/* delete intermediate pre-processor file if needed */
 	if (i_tmpfile) {
 		unlink(i_tmpfile);
@@ -95,6 +97,18 @@ static void failed(void)
 		unlink(cpp_stderr);
 		free(cpp_stderr);
 		cpp_stderr = NULL;
+	}
+
+	/* strip any local args */
+	args_strip(orig_args, "--ccache-");
+
+	if ((e=getenv("CCACHE_PREFIX"))) {
+		char *p = find_executable(e, MYNAME);
+		if (!p) {
+			perror(e);
+			exit(1);
+		}
+		args_add_prefix(orig_args, p);
 	}
 
 	execv(orig_args->argv[0], orig_args->argv);
@@ -277,7 +291,7 @@ static void find_hash(ARGS *args)
 	/* the compiler driver size and date. This is a simple minded way
 	   to try and detect compiler upgrades. It is not 100% reliable */
 	if (stat(args->argv[0], &st) != 0) {
-		cc_log("Couldn't stat the compiler!?\n");
+		cc_log("Couldn't stat the compiler!? (argv[0]='%s')\n", args->argv[0]);
 		stats_update(STATS_COMPILER);
 		failed();
 	}
@@ -407,10 +421,10 @@ static void from_cache(int first)
 		ret = 0;
 	} else {
 		unlink(output_file);
-		if (getenv("CCACHE_NOLINK")) {
-			ret = copy_file(hashname, output_file);
-		} else {
+		if (getenv("CCACHE_HARDLINK")) {
 			ret = link(hashname, output_file);
+		} else {
+			ret = copy_file(hashname, output_file);
 		}
 	}
 
@@ -473,21 +487,15 @@ static void from_cache(int first)
 static void find_compiler(int argc, char **argv)
 {
 	char *base;
-	char *path, *tok;
-	struct stat st1, st2;
+	char *path;
 
-	orig_args = args_init();
-	free(orig_args->argv);
-
-	orig_args->argv = argv;
-	orig_args->argc = argc;
+	orig_args = args_init(argc, argv);
 
 	base = basename(argv[0]);
 
 	/* we might be being invoked like "ccache gcc -c foo.c" */
 	if (strcmp(base, MYNAME) == 0) {
-		orig_args->argv++;
-		orig_args->argc--;
+		args_remove_first(orig_args);
 		free(base);
 		if (strchr(argv[1],'/')) {
 			/* a full path was given */
@@ -501,57 +509,14 @@ static void find_compiler(int argc, char **argv)
 		base = strdup(path);
 	}
 
-	path = getenv("CCACHE_PATH");
-	if (!path) {
-		path = getenv("PATH");
-	}
-	if (!path) {
-		cc_log("no PATH variable!?\n");
-		failed();
-	}
-
-	path = x_strdup(path);
-	
-	/* search the path looking for the first compiler of the right name
-	   that isn't us */
-	for (tok=strtok(path,":"); tok; tok = strtok(NULL, ":")) {
-		char *fname;
-		x_asprintf(&fname, "%s/%s", tok, base);
-		/* look for a normal executable file */
-		if (access(fname, X_OK) == 0 &&
-		    lstat(fname, &st1) == 0 &&
-		    stat(fname, &st2) == 0 &&
-		    S_ISREG(st2.st_mode)) {
-			/* if its a symlink then ensure it doesn't
-                           point at something called "ccache" */
-			if (S_ISLNK(st1.st_mode)) {
-				char *buf = x_realpath(fname);
-				if (buf) {
-					char *p = basename(buf);
-					if (strcmp(p, MYNAME) == 0) {
-						/* its a link to "ccache" ! */
-						free(p);
-						free(buf);
-						continue;
-					}
-					free(buf);
-					free(p);
-				}
-			}
-
-
-			/* found it! */
-			free(path);
-			orig_args->argv[0] = fname;
-			free(base);
-			return;
-		}
-		free(fname);
-	}
+	orig_args->argv[0] = find_executable(base, MYNAME);
 
 	/* can't find the compiler! */
-	perror(base);
-	exit(1);
+	if (!orig_args->argv[0]) {
+		stats_update(STATS_COMPILER);
+		perror(base);
+		exit(1);
+	}
 }
 
 
@@ -586,8 +551,9 @@ static void process_args(int argc, char **argv)
 	int found_c_opt = 0;
 	int found_S_opt = 0;
 	struct stat st;
+	char *e;
 
-	stripped_args = args_init();
+	stripped_args = args_init(0, NULL);
 
 	args_add(stripped_args, argv[0]);
 
@@ -597,8 +563,11 @@ static void process_args(int argc, char **argv)
 			failed();
 		}
 
-		/* check for bad options */
-		if (strcmp(argv[i], "-M") == 0) {
+		/* these are too hard */
+		if (strcmp(argv[i], "-fprofile-arcs")==0 ||
+		    strcmp(argv[i], "-fbranch-probabilities")==0 ||
+		    strcmp(argv[i], "-M") == 0 ||
+		    strcmp(argv[i], "-x") == 0) {
 			cc_log("argument %s is unsupported\n", argv[i]);
 			stats_update(STATS_UNSUPPORTED);
 			failed();
@@ -645,6 +614,16 @@ static void process_args(int argc, char **argv)
 			if (strcmp(argv[i], "-g0") != 0) {
 				found_debug = 1;
 			}
+			continue;
+		}
+
+		/* The user knows best: just swallow the next arg */
+		if (strcmp(argv[i], "--ccache-skip") == 0) {
+			i++;
+			if (i == argc) {
+				failed();
+			}
+			args_add(stripped_args, argv[i]);
 			continue;
 		}
 
@@ -757,10 +736,6 @@ static void process_args(int argc, char **argv)
 		}
 		p[1] = found_S_opt ? 's' : 'o';
 		p[2] = 0;
-#if 0
-		cc_log("Formed output file %s from input_file %s\n", 
-		       output_file, input_file);
-#endif
 	}
 
 	/* cope with -o /dev/null */
@@ -768,6 +743,15 @@ static void process_args(int argc, char **argv)
 		cc_log("Not a regular file %s\n", output_file);
 		stats_update(STATS_DEVICE);
 		failed();
+	}
+
+	if ((e=getenv("CCACHE_PREFIX"))) {
+		char *p = find_executable(e, MYNAME);
+		if (!p) {
+			perror(e);
+			exit(1);
+		}
+		args_add_prefix(stripped_args, p);
 	}
 }
 
@@ -851,7 +835,7 @@ static int ccache_main(int argc, char *argv[])
 
 		case 'c':
 			cleanup_all(cache_dir);
-			printf("Cleaned cached\n");
+			printf("Cleaned cache\n");
 			break;
 
 		case 'C':
