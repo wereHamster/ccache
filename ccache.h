@@ -1,4 +1,4 @@
-#define CCACHE_VERSION "2.3"
+#define CCACHE_VERSION "2.4"
 
 #include "config.h"
 
@@ -19,6 +19,9 @@
 #include <stdarg.h>
 #include <dirent.h>
 #include <limits.h>
+#ifdef HAVE_PWD_H
+#include <pwd.h>
+#endif
 
 #define STATUS_NOTFOUND 3
 #define STATUS_FATAL 4
@@ -91,6 +94,7 @@ int safe_open(const char *fname);
 char *x_realpath(const char *path);
 char *gnu_getcwd(void);
 int create_empty_file(const char *fname);
+const char *get_home_directory(void);
 
 void stats_update(enum stats stat);
 void stats_zero(void);
@@ -141,4 +145,15 @@ void args_remove_first(ARGS *args);
 #define COMPAR_FN_T __compar_fn_t
 #else
 typedef int (*COMPAR_FN_T)(const void *, const void *);
+#endif
+
+/* work with silly DOS binary open */
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
+
+/* mkstemp() on some versions of cygwin don't handle binary files, so
+   override */
+#ifdef __CYGWIN__
+#undef HAVE_MKSTEMP
 #endif

@@ -37,7 +37,7 @@ int execute(char **argv,
 		int fd;
 
 		unlink(path_stdout);
-		fd = open(path_stdout, O_WRONLY|O_CREAT|O_TRUNC|O_EXCL, 0666);
+		fd = open(path_stdout, O_WRONLY|O_CREAT|O_TRUNC|O_EXCL|O_BINARY, 0666);
 		if (fd == -1) {
 			exit(STATUS_NOCACHE);
 		}
@@ -45,7 +45,7 @@ int execute(char **argv,
 		close(fd);
 
 		unlink(path_stderr);
-		fd = open(path_stderr, O_WRONLY|O_CREAT|O_TRUNC|O_EXCL, 0666);
+		fd = open(path_stderr, O_WRONLY|O_CREAT|O_TRUNC|O_EXCL|O_BINARY, 0666);
 		if (fd == -1) {
 			exit(STATUS_NOCACHE);
 		}
@@ -75,6 +75,10 @@ char *find_executable(const char *name, const char *exclude_name)
 	char *path;
 	char *tok;
 	struct stat st1, st2;
+
+	if (*name == '/') {
+		return x_strdup(name);
+	}
 
 	path = getenv("CCACHE_PATH");
 	if (!path) {

@@ -26,6 +26,9 @@
 /* the base cache directory */
 char *cache_dir = NULL;
 
+/* the directory for temporary files */
+static char *temp_dir = NULL;
+
 /* the debug logfile name, if set */
 char *cache_logfile = NULL;
 
@@ -155,9 +158,9 @@ static void to_cache(ARGS *args)
 	struct stat st1, st2;
 	int status;
 
-	x_asprintf(&tmp_stdout, "%s/tmp.stdout.%s", cache_dir, tmp_string());
-	x_asprintf(&tmp_stderr, "%s/tmp.stderr.%s", cache_dir, tmp_string());
-	x_asprintf(&tmp_hashname, "%s/tmp.hash.%s.o", cache_dir, tmp_string());
+	x_asprintf(&tmp_stdout, "%s/tmp.stdout.%s", temp_dir, tmp_string());
+	x_asprintf(&tmp_stderr, "%s/tmp.stderr.%s", temp_dir, tmp_string());
+	x_asprintf(&tmp_hashname, "%s/tmp.hash.%s.o", temp_dir, tmp_string());
 
 	args_add(args, "-o");
 	args_add(args, tmp_hashname);
@@ -193,13 +196,13 @@ static void to_cache(ARGS *args)
 		cc_log("compile of %s gave status = %d\n", output_file, status);
 		stats_update(STATS_STATUS);
 
-		fd = open(tmp_stderr, O_RDONLY);
+		fd = open(tmp_stderr, O_RDONLY | O_BINARY);
 		if (fd != -1) {
 			if (strcmp(output_file, "/dev/null") == 0 ||
 			    rename(tmp_hashname, output_file) == 0 || errno == ENOENT) {
 				if (cpp_stderr) {
 					/* we might have some stderr from cpp */
-					int fd2 = open(cpp_stderr, O_RDONLY);
+					int fd2 = open(cpp_stderr, O_RDONLY | O_BINARY);
 					if (fd2 != -1) {
 						copy_fd(fd2, 2);
 						close(fd2);
@@ -321,6 +324,13 @@ static void find_hash(ARGS *args)
 		stats_update(STATS_COMPILER);
 		failed();
 	}
+
+	/* also include the hash of the compiler name - as some compilers
+	   use hard links and behave differently depending on the real name */
+	if (st.st_nlink > 1) {
+		hash_string(str_basename(args->argv[0]));
+	}
+
 	hash_int(st.st_size);
 	hash_int(st.st_mtime);
 
@@ -347,10 +357,10 @@ static void find_hash(ARGS *args)
 	}
 
 	/* now the run */
-	x_asprintf(&path_stdout, "%s/%s.tmp.%s.%s", cache_dir,
+	x_asprintf(&path_stdout, "%s/%s.tmp.%s.%s", temp_dir,
 		   input_base, tmp_string(), 
 		   i_extension);
-	x_asprintf(&path_stderr, "%s/tmp.cpp_stderr.%s", cache_dir, tmp_string());
+	x_asprintf(&path_stderr, "%s/tmp.cpp_stderr.%s", temp_dir, tmp_string());
 
 	if (!direct_i_file) {
 		/* run cpp on the input file to obtain the .i */
@@ -448,7 +458,7 @@ static void from_cache(int first)
 	struct stat st;
 
 	x_asprintf(&stderr_file, "%s.stderr", hashname);
-	fd_stderr = open(stderr_file, O_RDONLY);
+	fd_stderr = open(stderr_file, O_RDONLY | O_BINARY);
 	if (fd_stderr == -1) {
 		/* it isn't in cache ... */
 		free(stderr_file);
@@ -518,7 +528,7 @@ static void from_cache(int first)
 	}
 
 	/* send the cpp stderr, if applicable */
-	fd_cpp_stderr = open(cpp_stderr, O_RDONLY);
+	fd_cpp_stderr = open(cpp_stderr, O_RDONLY | O_BINARY);
 	if (fd_cpp_stderr != -1) {
 		copy_fd(fd_cpp_stderr, 2);
 		close(fd_cpp_stderr);
@@ -845,6 +855,11 @@ static void ccache(int argc, char *argv[])
 
 	/* if we can return from cache at this point then do */
 	from_cache(1);
+
+	if (getenv("CCACHE_READONLY")) {
+		cc_log("read-only set - doing real compile\n");
+		failed();
+	}
 	
 	/* run real compiler, sending output to cache */
 	to_cache(stripped_args);
@@ -883,7 +898,6 @@ static void usage(void)
 /* the main program when not doing a compile */
 static int ccache_main(int argc, char *argv[])
 {
-	extern int optind;
 	int c;
 	size_t v;
 
@@ -969,7 +983,12 @@ int main(int argc, char *argv[])
 
 	cache_dir = getenv("CCACHE_DIR");
 	if (!cache_dir) {
-		x_asprintf(&cache_dir, "%s/.ccache", getenv("HOME"));
+		x_asprintf(&cache_dir, "%s/.ccache", get_home_directory());
+	}
+
+	temp_dir = getenv("CCACHE_TEMPDIR");
+	if (!temp_dir) {
+		temp_dir = cache_dir;
 	}
 
 	cache_logfile = getenv("CCACHE_LOGFILE");

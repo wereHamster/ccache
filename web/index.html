@@ -18,21 +18,25 @@ in C with more features and better performance.<p>
 
 <h2>Latest release</h2>
 
-The latest release is ccache 2.3.
+The latest release is ccache 2.4.
 
 <ul>
-<li>Added CCACHE_UMASK option
-<li>Added support for compilation of .i files
-<li>Fixed bug with DEPENDENCIES_OUTPUT flag
-<li>Added support for more -Mx options
-<li>Added separate stderr channel for distcc
-<li>Improved test suite
+<li>Added CCACHE_READONLY option
+<li>Added CCACHE_TEMPDIR option
+<li>fixed handling of hard-linked compilers on AIX
+<li>added O_BINARY support, to try and support win32 compiles
+<li>show cache directory in stats output
+<li>fixed handling of HOME environment variable
 </ul>
 
 See the <a href="/ccache/ccache-man.html">manual page</a> for details
-on the new options.
+on the new options.<p>
 
 You can get this release from the <a href="/ftp/ccache/">download directory</a> 
+
+<p>NOTE! This release changes the hash input slighly, so you will
+probably find that you will not get any hits against your existing
+cache when you upgrade.
 
 <h2>Why bother?</h2>
 
@@ -133,6 +137,8 @@ Here are some related programs you may find interesting
 
 <ul>
 <li> <a href="http://distcc.samba.org/">distcc</a> - a distributed compilation system
+<li> <a href="http://cachecc1.sourceforge.net/">cachecc1</a> - a gcc specific cache
+<li> <a href="http://sourceforge.net/projects/gocache/">gocache</a> - a cross platform compiler cache
 </ul>
 <p>
 
