@@ -242,7 +242,7 @@ void traverse(const char *dir, void (*fn)(const char *, struct stat *))
 
 
 /* return the base name of a file - caller frees */
-char *basename(const char *s)
+char *str_basename(const char *s)
 {
 	char *p = strrchr(s, '/');
 	if (p) {
@@ -267,6 +267,7 @@ char *dirname(char *s)
 int lock_fd(int fd)
 {
 	struct flock fl;
+	int ret;
 
 	fl.l_type = F_WRLCK;
 	fl.l_whence = SEEK_SET;
@@ -274,7 +275,12 @@ int lock_fd(int fd)
 	fl.l_len = 1;
 	fl.l_pid = 0;
 
-	return fcntl(fd, F_SETLKW, &fl);
+	/* not sure why we would be getting a signal here,
+	   but one user claimed it is possible */
+	do {
+		ret = fcntl(fd, F_SETLKW, &fl);
+	} while (ret == -1 && errno == EINTR);
+	return ret;
 }
 
 /* return size on disk of a file */
@@ -359,8 +365,22 @@ char *x_realpath(const char *path)
 	if (maxlen < 4096) maxlen = 4096;
 	
 	ret = x_malloc(maxlen);
-	
+
+#if HAVE_REALPATH
 	p = realpath(path, ret);
+#else
+	/* yes, there are such systems. This replacement relies on
+	   the fact that when we call x_realpath we only care about symlinks */
+	{
+		int len = readlink(path, ret, maxlen-1);
+		if (len == -1) {
+			free(ret);
+			return NULL;
+		}
+		ret[len] = 0;
+		p = ret;
+	}
+#endif
 	if (p) {
 		p = x_strdup(p);
 		free(ret);
@@ -396,3 +416,17 @@ int mkstemp(char *template)
 	return open(template, O_RDWR | O_CREAT | O_EXCL, 0600);
 }
 #endif
+
+
+/* create an empty file */
+int create_empty_file(const char *fname)
+{
+	int fd;
+
+	fd = open(fname, O_WRONLY|O_CREAT|O_TRUNC|O_EXCL, 0666);
+	if (fd == -1) {
+		return -1;
+	}
+	close(fd);
+	return 0;
+}

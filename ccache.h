@@ -1,4 +1,4 @@
-#define CCACHE_VERSION "2.2"
+#define CCACHE_VERSION "2.3"
 
 #include "config.h"
 
@@ -83,13 +83,14 @@ char *x_strdup(const char *s);
 void *x_realloc(void *ptr, size_t size);
 void *x_malloc(size_t size);
 void traverse(const char *dir, void (*fn)(const char *, struct stat *));
-char *basename(const char *s);
+char *str_basename(const char *s);
 char *dirname(char *s);
 int lock_fd(int fd);
 size_t file_size(struct stat *st);
 int safe_open(const char *fname);
 char *x_realpath(const char *path);
 char *gnu_getcwd(void);
+int create_empty_file(const char *fname);
 
 void stats_update(enum stats stat);
 void stats_zero(void);
@@ -105,6 +106,9 @@ int unify_hash(const char *fname);
 
 #ifndef HAVE_VASPRINTF
 int vasprintf(char **, const char *, va_list );
+#endif
+#ifndef HAVE_ASPRINTF
+int asprintf(char **ptr, const char *format, ...);
 #endif
 
 #ifndef HAVE_SNPRINTF

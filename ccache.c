@@ -4,6 +4,7 @@
   The idea is based on the shell-script compilercache by Erik Thiele <erikyyy@erikyyy.de>
 
    Copyright (C) Andrew Tridgell 2002
+   Copyright (C) Martin Pool 2003
    
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -49,14 +50,17 @@ static const char *i_extension;
 /* the name of the temporary pre-processor file */
 static char *i_tmpfile;
 
+/* are we compiling a .i or .ii file directly? */
+static int direct_i_file;
+
 /* the name of the cpp stderr file */
 static char *cpp_stderr;
 
 /* the name of the statistics file */
 char *stats_file = NULL;
 
-/* did we find a -g option? */
-static int found_debug;
+/* can we safely use the unification hashing backend? */
+static int enable_unify;
 
 /* a list of supported file extensions, and the equivalent
    extension for code that has been through the pre-processor
@@ -76,6 +80,8 @@ static struct {
 	{"CXX", "ii"},
 	{"c++", "ii"},
 	{"C++", "ii"},
+	{"i", "i"},
+	{"ii", "ii"},
 	{NULL, NULL}};
 
 /*
@@ -87,7 +93,9 @@ static void failed(void)
 
 	/* delete intermediate pre-processor file if needed */
 	if (i_tmpfile) {
-		unlink(i_tmpfile);
+		if (!direct_i_file) {
+			unlink(i_tmpfile);
+		}
 		free(i_tmpfile);
 		i_tmpfile = NULL;
 	}
@@ -128,7 +136,9 @@ static const char *tmp_string(void)
 	if (!ret) {
 		char hostname[200];
 		strcpy(hostname, "unknown");
+#if HAVE_GETHOSTNAME
 		gethostname(hostname, sizeof(hostname)-1);
+#endif
 		hostname[sizeof(hostname)-1] = 0;
 		asprintf(&ret, "%s.%u", hostname, (unsigned)getpid());
 	}
@@ -151,6 +161,14 @@ static void to_cache(ARGS *args)
 
 	args_add(args, "-o");
 	args_add(args, tmp_hashname);
+
+	/* Turn off DEPENDENCIES_OUTPUT when running cc1, because
+	 * otherwise it will emit a line like
+	 *
+	 *  tmp.stdout.vexed.732.o: /home/mbp/.ccache/tmp.stdout.vexed.732.i
+	 *
+	 * unsetenv() is on BSD and Linux but not portable. */
+	putenv("DEPENDENCIES_OUTPUT");
 	
 	if (getenv("CCACHE_CPP2")) {
 		args_add(args, input_file);
@@ -195,7 +213,7 @@ static void to_cache(ARGS *args)
 				copy_fd(fd, 2);
 				close(fd);
 				unlink(tmp_stderr);
-				if (i_tmpfile) {
+				if (i_tmpfile && !direct_i_file) {
 					unlink(i_tmpfile);
 				}
 				exit(status);
@@ -238,7 +256,9 @@ static void find_hash(ARGS *args)
 	struct stat st;
 	int status;
 	int nlevels = 2;
-
+	char *input_base;
+	char *tmp;
+	
 	if ((s = getenv("CCACHE_NLEVELS"))) {
 		nlevels = atoi(s);
 		if (nlevels < 1) nlevels = 1;
@@ -249,9 +269,13 @@ static void find_hash(ARGS *args)
 
 	/* when we are doing the unifying tricks we need to include
            the input file name in the hash to get the warnings right */
-	if (!found_debug) {
+	if (enable_unify) {
 		hash_string(input_file);
 	}
+
+	/* we have to hash the extension, as a .i file isn't treated the same
+	   by the compiler as a .ii file */
+	hash_string(i_extension);
 
 	/* first the arguments */
 	for (i=1;i<args->argc;i++) {
@@ -264,6 +288,7 @@ static void find_hash(ARGS *args)
 			    strcmp(args->argv[i], "-include") == 0 ||
 			    strcmp(args->argv[i], "-L") == 0 ||
 			    strcmp(args->argv[i], "-D") == 0 ||
+			    strcmp(args->argv[i], "-idirafter") == 0 ||
 			    strcmp(args->argv[i], "-isystem") == 0) {
 				i++;
 				continue;
@@ -272,6 +297,7 @@ static void find_hash(ARGS *args)
 		if (strncmp(args->argv[i], "-I", 2) == 0 ||
 		    strncmp(args->argv[i], "-L", 2) == 0 ||
 		    strncmp(args->argv[i], "-D", 2) == 0 ||
+		    strncmp(args->argv[i], "-idirafter", 10) == 0 ||
 		    strncmp(args->argv[i], "-isystem", 8) == 0) {
 			continue;
 		}
@@ -307,25 +333,55 @@ static void find_hash(ARGS *args)
 		}
 	}
 
+	/* ~/hello.c -> tmp.hello.123.i 
+	   limit the basename to 10
+	   characters in order to cope with filesystem with small
+	   maximum filename length limits */
+	input_base = str_basename(input_file);
+	tmp = strchr(input_base, '.');
+	if (tmp != NULL) {
+		*tmp = 0;
+	}
+	if (strlen(input_base) > 10) {
+		input_base[10] = 0;
+	}
+
 	/* now the run */
-	x_asprintf(&path_stdout, "%s/tmp.stdout.%s.%s", cache_dir, tmp_string(), 
+	x_asprintf(&path_stdout, "%s/%s.tmp.%s.%s", cache_dir,
+		   input_base, tmp_string(), 
 		   i_extension);
 	x_asprintf(&path_stderr, "%s/tmp.cpp_stderr.%s", cache_dir, tmp_string());
 
-	args_add(args, "-E");
-	args_add(args, input_file);
-	status = execute(args->argv, path_stdout, path_stderr);
-	args_pop(args, 2);
+	if (!direct_i_file) {
+		/* run cpp on the input file to obtain the .i */
+		args_add(args, "-E");
+		args_add(args, input_file);
+		status = execute(args->argv, path_stdout, path_stderr);
+		args_pop(args, 2);
+	} else {
+		/* we are compiling a .i or .ii file - that means we
+		   can skip the cpp stage and directly form the
+		   correct i_tmpfile */
+		path_stdout = input_file;
+		if (create_empty_file(path_stderr) != 0) {
+			stats_update(STATS_ERROR);
+			cc_log("failed to create empty stderr file\n");
+			failed();
+		}
+		status = 0;
+	}
 
 	if (status != 0) {
-		unlink(path_stdout);
+		if (!direct_i_file) {
+			unlink(path_stdout);
+		}
 		unlink(path_stderr);
 		cc_log("the preprocessor gave %d\n", status);
 		stats_update(STATS_PREPROCESSOR);
 		failed();
 	}
 
-	/* if the compilation is with -g then we have to inlcude the whole of the
+	/* if the compilation is with -g then we have to include the whole of the
 	   preprocessor output, which means we are sensitive to line number
 	   information. Otherwise we can discard line number info, which makes
 	   us less sensitive to reformatting changes 
@@ -333,7 +389,7 @@ static void find_hash(ARGS *args)
 	   Note! I have now disabled the unification code by default
 	   as it gives the wrong line numbers for warnings. Pity.
 	*/
-	if (found_debug || !getenv("CCACHE_UNIFY")) {
+	if (!enable_unify) {
 		hash_file(path_stdout);
 	} else {
 		if (unify_hash(path_stdout) != 0) {
@@ -454,7 +510,9 @@ static void from_cache(int first)
 
 	/* get rid of the intermediate preprocessor file */
 	if (i_tmpfile) {
-		unlink(i_tmpfile);
+		if (!direct_i_file) {
+			unlink(i_tmpfile);
+		}
 		free(i_tmpfile);
 		i_tmpfile = NULL;
 	}
@@ -491,7 +549,7 @@ static void find_compiler(int argc, char **argv)
 
 	orig_args = args_init(argc, argv);
 
-	base = basename(argv[0]);
+	base = str_basename(argv[0]);
 
 	/* we might be being invoked like "ccache gcc -c foo.c" */
 	if (strcmp(base, MYNAME) == 0) {
@@ -501,7 +559,7 @@ static void find_compiler(int argc, char **argv)
 			/* a full path was given */
 			return;
 		}
-		base = basename(argv[1]);
+		base = str_basename(argv[1]);
 	}
 
 	/* support user override of the compiler */
@@ -522,16 +580,23 @@ static void find_compiler(int argc, char **argv)
 
 /* check a filename for C/C++ extension. Return the pre-processor
    extension */
-static const char *check_extension(const char *fname)
+static const char *check_extension(const char *fname, int *direct_i)
 {
 	int i;
 	const char *p;
+
+	if (direct_i) {
+		*direct_i = 0;
+	}
 
 	p = strrchr(fname, '.');
 	if (!p) return NULL;
 	p++;
 	for (i=0; extensions[i].extension; i++) {
 		if (strcmp(p, extensions[i].extension) == 0) {
+			if (direct_i && strcmp(p, extensions[i].i_extension) == 0) {
+				*direct_i = 1;
+			}
 			p = getenv("CCACHE_EXTENSION");
 			if (p) return p;
 			return extensions[i].i_extension;
@@ -564,9 +629,9 @@ static void process_args(int argc, char **argv)
 		}
 
 		/* these are too hard */
-		if (strcmp(argv[i], "-fprofile-arcs")==0 ||
-		    strcmp(argv[i], "-fbranch-probabilities")==0 ||
+		if (strcmp(argv[i], "-fbranch-probabilities")==0 ||
 		    strcmp(argv[i], "-M") == 0 ||
+		    strcmp(argv[i], "-MM") == 0 ||
 		    strcmp(argv[i], "-x") == 0) {
 			cc_log("argument %s is unsupported\n", argv[i]);
 			stats_update(STATS_UNSUPPORTED);
@@ -612,7 +677,7 @@ static void process_args(int argc, char **argv)
 		if (strncmp(argv[i], "-g", 2) == 0) {
 			args_add(stripped_args, argv[i]);
 			if (strcmp(argv[i], "-g0") != 0) {
-				found_debug = 1;
+				enable_unify = 0;
 			}
 			continue;
 		}
@@ -634,6 +699,7 @@ static void process_args(int argc, char **argv)
 					      "-L", "-D", "-U", "-x", "-MF", 
 					      "-MT", "-MQ", "-isystem", "-aux-info",
 					      "--param", "-A", "-Xlinker", "-u",
+					      "-idirafter", 
 					      NULL};
 			int j;
 			for (j=0;opts[j];j++) {
@@ -669,7 +735,7 @@ static void process_args(int argc, char **argv)
 		}
 
 		if (input_file) {
-			if (check_extension(argv[i])) {
+			if (check_extension(argv[i], NULL)) {
 				cc_log("multiple input files (%s and %s)\n",
 				       input_file, argv[i]);
 				stats_update(STATS_MULTIPLE);
@@ -696,7 +762,7 @@ static void process_args(int argc, char **argv)
 		failed();
 	}
 
-	i_extension = check_extension(input_file);
+	i_extension = check_extension(input_file, &direct_i_file);
 	if (i_extension == NULL) {
 		cc_log("Not a C/C++ file - %s\n", input_file);
 		stats_update(STATS_NOTC);
@@ -765,6 +831,10 @@ static void ccache(int argc, char *argv[])
 	if (getenv("CCACHE_DISABLE")) {
 		cc_log("ccache is disabled\n");
 		failed();
+	}
+
+	if (getenv("CCACHE_UNIFY")) {
+		enable_unify = 1;
 	}
 
 	/* process argument list, returning a new set of arguments for pre-processing */
@@ -869,14 +939,55 @@ static int ccache_main(int argc, char *argv[])
 	return 0;
 }
 
+
+/* Make a copy of stderr that will not be cached, so things like
+   distcc can send networking errors to it. */
+static void setup_uncached_err(void)
+{
+	char *buf;
+	int uncached_fd;
+	
+	uncached_fd = dup(2);
+	if (uncached_fd == -1) {
+		cc_log("dup(2) failed\n");
+		failed();
+	}
+
+	/* leak a pointer to the environment */
+	x_asprintf(&buf, "UNCACHED_ERR_FD=%d", uncached_fd);
+
+	if (putenv(buf) == -1) {
+		cc_log("putenv failed\n");
+		failed();
+	}
+}
+
+
 int main(int argc, char *argv[])
 {
+	char *p;
+
 	cache_dir = getenv("CCACHE_DIR");
 	if (!cache_dir) {
 		x_asprintf(&cache_dir, "%s/.ccache", getenv("HOME"));
 	}
 
 	cache_logfile = getenv("CCACHE_LOGFILE");
+
+	setup_uncached_err();
+	
+
+	/* the user might have set CCACHE_UMASK */
+	p = getenv("CCACHE_UMASK");
+	if (p) {
+		mode_t mask;
+		errno = 0;
+		mask = strtol(p, NULL, 8);
+		if (errno == 0) {
+			umask(mask);
+		}
+	}
+
 
 	/* check if we are being invoked as "ccache" */
 	if (strlen(argv[0]) >= strlen(MYNAME) &&

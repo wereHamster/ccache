@@ -86,6 +86,7 @@ To install for the second method do something like this:
 verb(
   cp ccache /usr/local/bin/
   ln -s /usr/local/bin/ccache /usr/local/bin/gcc
+  ln -s /usr/local/bin/ccache /usr/local/bin/g++
   ln -s /usr/local/bin/ccache /usr/local/bin/cc
 )
 This will work as long as /usr/local/bin comes before the path to gcc
@@ -100,7 +101,7 @@ manpagesection(EXTRA OPTIONS)
 When run as a compiler front end ccache usually just takes the same
 command line options as the compiler you are using. The only exception
 to this is the option '--ccache-skip'. That option can be used to tell
-ccache that the next option is definately not a input filename, and
+ccache that the next option is definitely not a input filename, and
 should be passed along to the compiler as-is. 
 
 The reason this can be important is that ccache does need to parse the
@@ -115,7 +116,7 @@ compiler as a command line option.
 
 manpagesection(ENVIRONMENT VARIABLES)
 
-ccache used a number of environment variables to control operation. In
+ccache uses a number of environment variables to control operation. In
 most cases you won't need any of these as the defaults will be fine.
 
 startdit()
@@ -172,6 +173,12 @@ file copy. Using hard links is faster, but can confuse programs like
 dit(bf(CCACHE_RECACHE)) This forces ccache to not use any cached
 results, even if it finds them. New results are still cached, but
 existing cache entries are ignored.
+
+dit(bf(CCACHE_UMASK)) This sets the umask for ccache and all child
+processes (such as the compiler). This is mostly useful when you wish
+to share your cache with other users. Note that this also affects the
+file permissions set on the object files created from your
+compilations.
 
 dit(bf(CCACHE_HASHDIR)) This tells ccache to hash the current working
 directory when calculating the hash that is used to distinguish two
@@ -264,10 +271,12 @@ following conditions need to be met:
 
 itemize(
   it() Use the same bf(CCACHE_DIR) environment variable setting
+  it() Set the bf(CCACHE_NOLINK) environment variable
+  it() Make sure everyone sets the CCACHE_UMASK environment variable
+  to 002, this ensures that cached files are accessible to everyone in
+  the group.
   it() Make sure that all users have write permission in the entire
   cache directory (and that you trust all users of the shared cache). 
-  it() Tell your users to set a umask that allows group writes
-  (eg. umask 002)
   it() Make sure that the setgid bit is set on all directories in the
   cache. This tells the filesystem to inherit group ownership for new
   directories. The command "chmod g+s `find $CCACHE_DIR -type d`" might
@@ -301,6 +310,12 @@ it() ccache can cache compiler output that includes warnings. In many
 it() ccache can handle a much wider ranger of compiler options
 it() ccache avoids a double call to cpp on a cache miss
 )
+
+manpagesection(BUGS)
+
+When the cache is stored on an NFS filesystem, the filesystem must be
+exported with the bf(no_subtree_check) option to make renames between
+directories reliable.
 
 manpagesection(CREDITS)
 

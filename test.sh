@@ -3,7 +3,12 @@
 # a simple test suite for ccache
 # tridge@samba.org
 
-COMPILER=cc
+if test -n "$CC"; then
+ COMPILER="$CC"
+else
+ COMPILER=cc
+fi
+
 CCACHE=../ccache
 TESTDIR=test.$$
 
@@ -52,7 +57,7 @@ basetests() {
     checkstat 'cache hit' 0
     checkstat 'cache miss' 0
 
-    j=0
+    j=1
     rm -f *.c
     while [ $j -lt 32 ]; do
 	randcode test$j.c $j
@@ -114,7 +119,9 @@ basetests() {
     checkstat 'compiler produced stdout' 1
 
     testname="non-regular"
-    $CCACHE_COMPILE -o /dev/zero -c test1.c
+    mkdir testd
+    $CCACHE_COMPILE -o testd -c test1.c > /dev/null 2>&1
+    rmdir testd
     checkstat 'output to a non-regular file' 1
 
     testname="no-input"
@@ -129,21 +136,21 @@ basetests() {
     checkstat 'cache hit' 4 
 
     testname="CCACHE_CPP2"
-    CCACHE_CPP2=1 $CCACHE_COMPILE -c test1.c -O -Wall
+    CCACHE_CPP2=1 $CCACHE_COMPILE -c test1.c -O -O
     checkstat 'cache hit' 4 
     checkstat 'cache miss' 3
 
-    CCACHE_CPP2=1 $CCACHE_COMPILE -c test1.c -O -Wall
+    CCACHE_CPP2=1 $CCACHE_COMPILE -c test1.c -O -O
     checkstat 'cache hit' 5 
     checkstat 'cache miss' 3
 
     testname="CCACHE_NOSTATS"
-    CCACHE_NOSTATS=1 $CCACHE_COMPILE -c test1.c -O -Wall
+    CCACHE_NOSTATS=1 $CCACHE_COMPILE -c test1.c -O -O
     checkstat 'cache hit' 5
     checkstat 'cache miss' 3
     
     testname="CCACHE_RECACHE"
-    CCACHE_RECACHE=1 $CCACHE_COMPILE -c test1.c -O -Wall
+    CCACHE_RECACHE=1 $CCACHE_COMPILE -c test1.c -O -O
     checkstat 'cache hit' 5 
     checkstat 'cache miss' 4
 
@@ -154,19 +161,21 @@ basetests() {
 
 
     testname="CCACHE_HASHDIR"
-    CCACHE_HASHDIR=1 $CCACHE_COMPILE -c test1.c -O -Wall
+    CCACHE_HASHDIR=1 $CCACHE_COMPILE -c test1.c -O -O
     checkstat 'cache hit' 5
     checkstat 'cache miss' 5
 
-    CCACHE_HASHDIR=1 $CCACHE_COMPILE -c test1.c -O -Wall
+    CCACHE_HASHDIR=1 $CCACHE_COMPILE -c test1.c -O -O
     checkstat 'cache hit' 6
     checkstat 'cache miss' 5
 
     checkstat 'files in cache' 8
     
     testname="comments"
-    echo '/* a silly comment */' >> test1.c
-    $CCACHE_COMPILE -c test1.c
+    echo '/* a silly comment */' > test1-comment.c
+    cat test1.c >> test1-comment.c
+    $CCACHE_COMPILE -c test1-comment.c
+    rm -f test1-comment*
     checkstat 'cache hit' 6
     checkstat 'cache miss' 6
 
@@ -174,8 +183,11 @@ basetests() {
     CCACHE_UNIFY=1 $CCACHE_COMPILE -c test1.c
     checkstat 'cache hit' 6
     checkstat 'cache miss' 7
-    echo '/* another comment */' >> test1.c
+    mv test1.c test1-saved.c
+    echo '/* another comment */' > test1.c
+    cat test1-saved.c >> test1.c
     CCACHE_UNIFY=1 $CCACHE_COMPILE -c test1.c
+    mv test1-saved.c test1.c
     checkstat 'cache hit' 7
     checkstat 'cache miss' 7
 
@@ -183,14 +195,42 @@ basetests() {
     for f in *.c; do
 	$CCACHE_COMPILE -c $f
     done
-    checkstat 'cache hit' 7
-    checkstat 'cache miss' 39
-    checkstat 'files in cache' 76
+    checkstat 'cache hit' 8
+    checkstat 'cache miss' 37
+    checkstat 'files in cache' 72
     $CCACHE -F 48 -c > /dev/null
     if [ `getstat 'files in cache'` -gt 48 ]; then
 	test_failed '-F test failed'
     fi
 
+    testname="cpp call"
+    $CCACHE_COMPILE -c test1.c -E > test1.i
+    checkstat 'cache hit' 8
+    checkstat 'cache miss' 37
+
+    testname="direct .i compile"
+    $CCACHE_COMPILE -c test1.c
+    checkstat 'cache hit' 8
+    checkstat 'cache miss' 38
+
+    $CCACHE_COMPILE -c test1.i
+    checkstat 'cache hit' 9
+    checkstat 'cache miss' 38
+
+    $CCACHE_COMPILE -c test1.i
+    checkstat 'cache hit' 10
+    checkstat 'cache miss' 38
+
+    testname="direct .ii file"
+    mv test1.i test1.ii
+    $CCACHE_COMPILE -c test1.ii
+    checkstat 'cache hit' 10
+    checkstat 'cache miss' 39
+
+    $CCACHE_COMPILE -c test1.ii
+    checkstat 'cache hit' 11
+    checkstat 'cache miss' 39
+    
     testname="zero-stats"
     $CCACHE -z > /dev/null
     checkstat 'cache hit' 0
@@ -210,7 +250,8 @@ rm -rf $TESTDIR
 mkdir $TESTDIR
 cd $TESTDIR || exit 1
 mkdir .ccache
-export CCACHE_DIR=.ccache
+CCACHE_DIR=.ccache
+export CCACHE_DIR
 
 testsuite="base"
 CCACHE_COMPILE="$CCACHE $COMPILER"

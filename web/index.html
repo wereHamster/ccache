@@ -18,23 +18,15 @@ in C with more features and better performance.<p>
 
 <h2>Latest release</h2>
 
-The latest release is ccache 2.1. This release fixes a segv introduced
-for a a simple compile with 2.0. The 2.0 release had the following
-features:
+The latest release is ccache 2.3.
 
 <ul>
-<li>minor Makefile install fixes
-<li>fixed some compilation warnings
-<li>added -C option for 'clear cache completely'
-<li>added CCACHE_CC option
-<li>added CCACHE_RECACHE option
-<li>added CCACHE_EXTENSION option
-<li>added CCACHE_HASHDIR option
-<li>embed the hostname in temporary file names for NFS sharing
-<li>better handling of the various -M compiler options
-<li>handle attempts to compile to stdout
-<li>set default max cache size to 1GB
-<li>better signal handling
+<li>Added CCACHE_UMASK option
+<li>Added support for compilation of .i files
+<li>Fixed bug with DEPENDENCIES_OUTPUT flag
+<li>Added support for more -Mx options
+<li>Added separate stderr channel for distcc
+<li>Improved test suite
 </ul>
 
 See the <a href="/ccache/ccache-man.html">manual page</a> for details
@@ -62,10 +54,10 @@ CVS commit. On some of those machines the build took over an hour. By
 using ccache we get the same effect as clean builds but about 6 times
 faster.<p>
 
-The second reason is the autobuild system I run for Quantum. That
-system builds our whole Linux based OS from scratch after every CVS
-commit to catch compilation problems quickly. Using ccache those
-builds are much faster.
+The second reason is the autobuild system I used to run for
+Quantum. That system builds our whole Linux based OS from scratch
+after every CVS commit to catch compilation problems quickly. Using
+ccache those builds are much faster.
 
 <h2>Is it safe?</h2>
 
@@ -143,6 +135,12 @@ Here are some related programs you may find interesting
 <li> <a href="http://distcc.samba.org/">distcc</a> - a distributed compilation system
 </ul>
 <p>
+
+<h2>Mailing list</h2>
+
+<p>A <a href="http://lists.samba.org/mailman/listinfo/ccache/">mailing
+list</a> is available for discussion of ccache.
+
 
 <hr>
 <tiny>
