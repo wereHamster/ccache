@@ -1,4 +1,4 @@
-#define CCACHE_VERSION "1.9"
+#define CCACHE_VERSION "2.1.1"
 
 #include "config.h"
 
@@ -28,6 +28,11 @@
 
 #define LIMIT_MULTIPLE 0.8
 
+/* default maximum cache size */
+#ifndef DEFAULT_MAXSIZE
+#define DEFAULT_MAXSIZE (1000*1000)
+#endif
+
 enum stats {
 	STATS_NONE=0,
 	STATS_STDOUT,
@@ -50,6 +55,7 @@ enum stats {
 	STATS_MULTIPLE,
 	STATS_CONFTEST,
 	STATS_UNSUPPORTED,
+	STATS_OUTSTDOUT,
 
 	STATS_END
 };
@@ -83,6 +89,7 @@ int lock_fd(int fd);
 size_t file_size(struct stat *st);
 int safe_open(const char *fname);
 char *x_realpath(const char *path);
+char *gnu_getcwd(void);
 
 void stats_update(enum stats stat);
 void stats_zero(void);
@@ -106,6 +113,7 @@ int snprintf(char *,size_t ,const char *, ...);
 
 void cleanup_dir(const char *dir, size_t maxfiles, size_t maxsize);
 void cleanup_all(const char *dir);
+void wipe_all(const char *dir);
 
 int execute(char **argv, 
 	    const char *path_stdout,

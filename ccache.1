@@ -26,6 +26,7 @@ Here is a summary of the options to ccache\&.
 -s                      show statistics summary
 -z                      zero statistics
 -c                      run a cache cleanup
+-C                      clear the cache completely
 -F <maxfiles>           set maximum files in cache
 -M <maxsize>            set maximum size of cache (use G, M or K)
 -h                      this help page
@@ -64,6 +65,9 @@ keeps the cache below the specified limits at runtime and keeps
 statistics up to date on each compile\&. This option is mostly useful
 if you manually modify the cache contents or believe that the cache
 size statistics may be inaccurate\&.
+.IP 
+.IP "\fB-C\fP" 
+Clear the entire cache, removing all cached files\&.
 .IP 
 .IP "\fB-F maxfiles\fP" 
 This sets the maximum number of files allowed in
@@ -132,6 +136,11 @@ don\&'t do this then ccache will look for the first executable matching
 the compiler name in the normal PATH that isn\&'t a symbolic link to
 ccache itself\&.
 .IP 
+.IP "\fBCCACHE_CC\fP" 
+You can optionally set CCACHE_CC to force the name
+of the compiler to use\&. If you don\&'t do this then ccache works it out
+from the command line\&.
+.IP 
 .IP "\fBCCACHE_DISABLE\fP" 
 If you set the environment variable
 CCACHE_DISABLE then ccache will just call the real compiler,
@@ -165,6 +174,22 @@ instead\&. The main reason for setting this option is to avoid the
 update of the modification time on object files that are the result of
 the same compilation in a different directory\&.
 .IP 
+.IP "\fBCCACHE_RECACHE\fP" 
+This forces ccache to not use any cached
+results, even if it finds them\&. New results are still cached, but
+existing cache entries are ignored\&.
+.IP 
+.IP "\fBCCACHE_HASHDIR\fP" 
+This tells ccache to hash the current working
+directory when calculating the hash that is used to distinguish two
+compiles\&. This prevents a problem with the storage of the current
+working directory in the debug info of a object file, which can lead
+ccache to give a cached object file that has the working directory in
+the debug info set incorrectly\&. This option is off by default as the
+incorrect setting of this debug info rarely causes problems\&. If you
+strike problems with gdb not using the correct directory then enable
+this option\&.
+.IP 
 .IP "\fBCCACHE_UNIFY\fP" 
 If you set the environment variable CCACHE_UNIFY
 then ccache will use the C/C++ unifier when hashing the pre-processor
@@ -177,6 +202,15 @@ cached compiles with CCACHE_UNIFY set cannot be used when
 CCACHE_UNIFY is not set and vice versa\&. The reason the unifier is off
 by default is that it can give incorrect line number information in
 compiler warning messages\&.
+.IP 
+.IP "\fBCCACHE_EXTENSION\fP" 
+Normally ccache tries to automatically
+determine the extension to use for intermediate C pre-processor files
+based on the type of file being compiled\&. Unfortunately this sometimes
+doesn\&'t work, for example when using the aCC compiler on HP-UX\&. On
+systems like this you can use the CCACHE_EXTENSION option to override
+the default\&. On HP-UX set this environment variable to "i" if you use
+the aCC compiler\&.
 .IP 
 .PP 
 .SH "CACHE SIZE MANAGEMENT" 
@@ -213,6 +247,33 @@ ccache has been carefully written to always produce exactly the same
 compiler output that you would get without the cache\&. If you ever
 discover a case where ccache changes the output of your compiler then
 please let me know\&.
+.PP 
+.SH "SHARING A CACHE" 
+.PP 
+A group of developers can increase the cache hit rate by sharing a
+cache directory\&.  The hard links however cause unwanted side effects,
+as all links to a cached file share the file\&'s modification timestamp\&.
+This results in false dependencies to be triggered by timestamp-based
+build systems whenever another user links to an existing
+file\&. Typically, users will see that their libraries and binaries are
+relinked without reason\&.  To share a cache without side effects, the
+following conditions need to be met:
+.PP 
+.IP o 
+Use the same \fBCCACHE_DIR\fP environment variable setting
+.IP o 
+Set the \fBCCACHE_NOLINK\fP environment variable
+.IP o 
+Make sure that all users have write permission in the entire
+cache directory (and that you trust all users of the shared cache)\&. 
+.IP o 
+Tell your users to set a umask that allows group writes
+(eg\&. umask 002)
+.IP o 
+Make sure that the setgid bit is set on all directories in the
+cache\&. This tells the filesystem to inherit group ownership for new
+directories\&. The command "chmod g+s `find $CCACHE_DIR -type d`" might
+be useful for this\&.
 .PP 
 .SH "HISTORY" 
 .PP 

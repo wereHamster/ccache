@@ -61,10 +61,11 @@ static void traverse_fn(const char *fname, struct stat *st)
 
 	if (num_files == allocated) {
 		allocated = 10000 + num_files*2;
-		files = x_realloc(files, sizeof(struct files *)*allocated);
+		files = (struct files **)x_realloc(files, 
+						   sizeof(struct files *)*allocated);
 	}
 
-	files[num_files] = x_malloc(sizeof(struct files));
+	files[num_files] = (struct files *)x_malloc(sizeof(struct files));
 	files[num_files]->fname = x_strdup(fname);
 	files[num_files]->mtime = st->st_mtime;
 	files[num_files]->size = file_size(st) / 1024;
@@ -154,4 +155,39 @@ void cleanup_all(const char *dir)
 		free(dname);
 		free(sfile);
 	}
+}
+
+
+/* traverse function for wiping files */
+static void wipe_fn(const char *fname, struct stat *st)
+{
+	char *p;
+
+	if (!S_ISREG(st->st_mode)) return;
+
+	p = basename(fname);
+	if (strcmp(p, "stats") == 0) {
+		free(p);
+		return;
+	}
+	free(p);
+
+	unlink(fname);
+}
+
+
+/* wipe all cached files in all subdirs */
+void wipe_all(const char *dir)
+{
+	char *dname;
+	int i;
+	
+	for (i=0;i<=0xF;i++) {
+		x_asprintf(&dname, "%s/%1x", dir, i);
+		traverse(dir, wipe_fn);
+		free(dname);
+	}
+
+	/* and fix the counters */
+	cleanup_all(dir);
 }

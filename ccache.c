@@ -44,7 +44,7 @@ static char *input_file;
 static char *hashname;
 
 /* the extension of the file after pre-processing */
-static char *i_extension;
+static const char *i_extension;
 
 /* the name of the temporary pre-processor file */
 static char *i_tmpfile;
@@ -103,6 +103,26 @@ static void failed(void)
 	exit(1);
 }
 
+
+/* return a string to be used to distinguish temporary files 
+   this also tries to cope with NFS by adding the local hostname 
+*/
+static const char *tmp_string(void)
+{
+	static char *ret;
+
+	if (!ret) {
+		char hostname[200];
+		strcpy(hostname, "unknown");
+		gethostname(hostname, sizeof(hostname)-1);
+		hostname[sizeof(hostname)-1] = 0;
+		asprintf(&ret, "%s.%u", hostname, (unsigned)getpid());
+	}
+
+	return ret;
+}
+
+
 /* run the real compiler and put the result in cache */
 static void to_cache(ARGS *args)
 {
@@ -111,9 +131,9 @@ static void to_cache(ARGS *args)
 	struct stat st1, st2;
 	int status;
 
-	x_asprintf(&tmp_stdout, "%s/tmp.stdout.%d", cache_dir, getpid());
-	x_asprintf(&tmp_stderr, "%s/tmp.stderr.%d", cache_dir, getpid());
-	x_asprintf(&tmp_hashname, "%s/tmp.hash.%d.o", cache_dir, getpid());
+	x_asprintf(&tmp_stdout, "%s/tmp.stdout.%s", cache_dir, tmp_string());
+	x_asprintf(&tmp_stderr, "%s/tmp.stderr.%s", cache_dir, tmp_string());
+	x_asprintf(&tmp_hashname, "%s/tmp.hash.%s.o", cache_dir, tmp_string());
 
 	args_add(args, "-o");
 	args_add(args, tmp_hashname);
@@ -179,7 +199,7 @@ static void to_cache(ARGS *args)
 	    stat(tmp_hashname, &st2) != 0 ||
 	    rename(tmp_hashname, hashname) != 0 ||
 	    rename(tmp_stderr, path_stderr) != 0) {
-		cc_log("failed to rename tmp files\n");
+		cc_log("failed to rename tmp files - %s\n", strerror(errno));
 		stats_update(STATS_ERROR);
 		failed();
 	}
@@ -264,10 +284,19 @@ static void find_hash(ARGS *args)
 	hash_int(st.st_size);
 	hash_int(st.st_mtime);
 
+	/* possibly hash the current working directory */
+	if (getenv("CCACHE_HASHDIR")) {
+		char *cwd = gnu_getcwd();
+		if (cwd) {
+			hash_string(cwd);
+			free(cwd);
+		}
+	}
+
 	/* now the run */
-	x_asprintf(&path_stdout, "%s/tmp.stdout.%d.%s", cache_dir, getpid(), 
+	x_asprintf(&path_stdout, "%s/tmp.stdout.%s.%s", cache_dir, tmp_string(), 
 		   i_extension);
-	x_asprintf(&path_stderr, "%s/tmp.cpp_stderr.%d", cache_dir, getpid());
+	x_asprintf(&path_stderr, "%s/tmp.cpp_stderr.%s", cache_dir, tmp_string());
 
 	args_add(args, "-E");
 	args_add(args, input_file);
@@ -358,6 +387,14 @@ static void from_cache(int first)
 
 	/* make sure the output is there too */
 	if (stat(hashname, &st) != 0) {
+		close(fd_stderr);
+		unlink(stderr_file);
+		free(stderr_file);
+		return;
+	}
+
+	/* the user might be disabling cache hits */
+	if (first && getenv("CCACHE_RECACHE")) {
 		close(fd_stderr);
 		unlink(stderr_file);
 		free(stderr_file);
@@ -459,6 +496,11 @@ static void find_compiler(int argc, char **argv)
 		base = basename(argv[1]);
 	}
 
+	/* support user override of the compiler */
+	if ((path=getenv("CCACHE_CC"))) {
+		base = strdup(path);
+	}
+
 	path = getenv("CCACHE_PATH");
 	if (!path) {
 		path = getenv("PATH");
@@ -515,16 +557,18 @@ static void find_compiler(int argc, char **argv)
 
 /* check a filename for C/C++ extension. Return the pre-processor
    extension */
-static char *check_extension(const char *fname)
+static const char *check_extension(const char *fname)
 {
 	int i;
-	char *p;
+	const char *p;
 
 	p = strrchr(fname, '.');
 	if (!p) return NULL;
 	p++;
 	for (i=0; extensions[i].extension; i++) {
 		if (strcmp(p, extensions[i].extension) == 0) {
+			p = getenv("CCACHE_EXTENSION");
+			if (p) return p;
 			return extensions[i].i_extension;
 		}
 	}
@@ -549,20 +593,12 @@ static void process_args(int argc, char **argv)
 
 	for (i=1; i<argc; i++) {
 		/* some options will never work ... */
-		if (strncmp(argv[i], "-E", 2) == 0) {
+		if (strcmp(argv[i], "-E") == 0) {
 			failed();
 		}
 
-		/* cope with -MD, -MM, -MMD before the code below chucks them */
-		if (strcmp(argv[i], "-MD") == 0 ||
-		    strcmp(argv[i], "-MM") == 0 ||
-		    strcmp(argv[i], "-MMD") == 0) {
-			args_add(stripped_args, argv[i]);
-			continue;
-		}
-
 		/* check for bad options */
-		if (strncmp(argv[i], "-M", 2) == 0) {
+		if (strcmp(argv[i], "-M") == 0) {
 			cc_log("argument %s is unsupported\n", argv[i]);
 			stats_update(STATS_UNSUPPORTED);
 			failed();
@@ -613,21 +649,30 @@ static void process_args(int argc, char **argv)
 		}
 
 		/* options that take an argument */
-		if (strcmp(argv[i], "-I") == 0 ||
-		    strcmp(argv[i], "-include") == 0 ||
-		    strcmp(argv[i], "-L") == 0 ||
-		    strcmp(argv[i], "-D") == 0 ||
-		    strcmp(argv[i], "-isystem") == 0) {
-			if (i == argc-1) {
-				cc_log("missing argument to %s\n", argv[i]);
-				stats_update(STATS_ARGS);
-				failed();
-			}
+		{
+			const char *opts[] = {"-I", "-include", "-imacros", "-iprefix",
+					      "-iwithprefix", "-iwithprefixbefore",
+					      "-L", "-D", "-U", "-x", "-MF", 
+					      "-MT", "-MQ", "-isystem", "-aux-info",
+					      "--param", "-A", "-Xlinker", "-u",
+					      NULL};
+			int j;
+			for (j=0;opts[j];j++) {
+				if (strcmp(argv[i], opts[j]) == 0) {
+					if (i == argc-1) {
+						cc_log("missing argument to %s\n", 
+						       argv[i]);
+						stats_update(STATS_ARGS);
+						failed();
+					}
 						
-			args_add(stripped_args, argv[i]);
-			args_add(stripped_args, argv[i+1]);
-			i++;
-			continue;
+					args_add(stripped_args, argv[i]);
+					args_add(stripped_args, argv[i+1]);
+					i++;
+					break;
+				}
+			}
+			if (opts[j]) continue;
 		}
 
 		/* other options */
@@ -688,6 +733,13 @@ static void process_args(int argc, char **argv)
 		} else {
 			stats_update(STATS_LINK);
 		}
+		failed();
+	}
+
+
+	/* don't try to second guess the compilers heuristics for stdout handling */
+	if (output_file && strcmp(output_file, "-") == 0) {
+		stats_update(STATS_OUTSTDOUT);
 		failed();
 	}
 
@@ -767,6 +819,7 @@ static void usage(void)
 	printf("-s                      show statistics summary\n");
 	printf("-z                      zero statistics\n");
 	printf("-c                      run a cache cleanup\n");
+	printf("-C                      clear the cache completely\n");
 	printf("-F <maxfiles>           set maximum files in cache\n");
 	printf("-M <maxsize>            set maximum size of cache (use G, M or K)\n");
 	printf("-h                      this help page\n");
@@ -780,7 +833,7 @@ static int ccache_main(int argc, char *argv[])
 	int c;
 	size_t v;
 
-	while ((c = getopt(argc, argv, "hszcF:M:V")) != -1) {
+	while ((c = getopt(argc, argv, "hszcCF:M:V")) != -1) {
 		switch (c) {
 		case 'V':
 			printf("ccache version %s\n", CCACHE_VERSION);
@@ -799,6 +852,11 @@ static int ccache_main(int argc, char *argv[])
 		case 'c':
 			cleanup_all(cache_dir);
 			printf("Cleaned cached\n");
+			break;
+
+		case 'C':
+			wipe_all(cache_dir);
+			printf("Cleared cache\n");
 			break;
 
 		case 'z':
